@@ -3,6 +3,7 @@
 """General linear model
 
 author: Yichuan Liu
+author2: MEEEEE
 """
 import numpy as np
 from numpy.linalg import eigvals, inv, solve, matrix_rank, pinv, svd
