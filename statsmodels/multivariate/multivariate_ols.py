@@ -2,8 +2,7 @@
 
 """General linear model
 
-author: Yichuan Liu
-author2: MEEEEE
+author: Yichuan Liu, Meaghan Flagg 
 """
 import numpy as np
 from numpy.linalg import eigvals, inv, solve, matrix_rank, pinv, svd
@@ -414,6 +413,51 @@ class _MultivariateOLSResults(object):
         self.exog_names = fitted_mv_ols.exog_names
         self.endog_names = fitted_mv_ols.endog_names
         self._fittedmod = fitted_mv_ols._fittedmod
+        self.nobs = self._fitted_mod[1] + len(self.exog_names)   # this is hacky. consider modifying _multivariate_ols_fit to return nobs.
+    
+
+    def ssr(self, multioutput="uniform_average"):
+        """
+        Multioutput handling: see sklearn.metrics.meansquarederror for reference
+        https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_squared_error.html
+        
+        Parameters
+        ----------
+        multioutput : string in ['raw_values', 'uniform_average'] or array-like of shape (n_outputs)
+             Defines aggregating of multiple output values (e.g. for each Y/dependent/endog variable).
+             Array-like value defines weights used to average errors.
+        
+        Returns
+        ----------
+        ssr : float or array of floats
+             A non-negative floating point value (the best value is 0.0), or an
+             array of floating point values, one for each individual Y/dependent/endog variable.
+        """
+        # get array of ssrs from tuple output of self._fittedmod
+        ssrs = np.diagonal(self._fittedmod[3])
+        if isinstance(multioutput, str):
+            if multioutput == "uniform_average":
+                ssr = np.mean(ssrs)
+            elif multioutput == "raw_values":
+                ssr = ssrs
+            else:
+                msg = "Expected either 'uniform_average' or 'raw_values', got {}.".format(multioutput)
+                raise ValueError(msg)
+            
+            return ssr
+        
+        # if multioutput is array-like, treat as weights:
+        elif hasattr(multioutput, "__len__"):
+            if len(multioutput) != len(ssrs):
+                msg = "Dimensions of output weights do not match dimensions of enodg/Y variables! Expected {}, got {}.".format(len(ssrs), len(multioutput))
+                raise ValueError(msg)
+            ssr = np.average(ssrs, weights = multioutput)
+            return ssr
+        else:
+            msg = "Expected str ['uniform_average','raw_values'] or array-like, got {}".format(type(multioutput))
+            raise ValueError(msg)
+        
+
 
     def __str__(self):
         return self.summary().__str__()
