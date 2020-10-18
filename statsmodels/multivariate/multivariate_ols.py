@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+# TODO: add summary method for _MultivariateOLSresults
+
 """General linear model
 
 author: Yichuan Liu, Meaghan Flagg 
@@ -13,6 +15,8 @@ from patsy import DesignInfo
 from statsmodels.compat.pandas import Substitution
 from statsmodels.base.model import Model
 from statsmodels.iolib import summary2
+from statsmodels.tools.decorators import (cache_readonly,
+                                          cache_writable)
 __docformat__ = 'restructuredtext en'
 
 _hypotheses_doc = \
@@ -393,16 +397,61 @@ class _MultivariateOLS(Model):
                              ' to fit multivariate OLS!')
         super(_MultivariateOLS, self).__init__(endog, exog, missing=missing,
                                                hasconst=hasconst, **kwargs)
+        self.nobs = self.endog.shape[0]
 
     def fit(self, method='svd'):
         self._fittedmod = _multivariate_ols_fit(
             self.endog, self.exog, method=method)
         return _MultivariateOLSResults(self)
 
+class _MultivariateResults(): # Intended as parent class for _MultivariateOLSResults. NOT IMPLEMENTED
+    """
+    Class to contain multivariate model results
+
+    Parameters
+    ----------
+    model : class instance
+         the previously specified model instance (e.g. _MultivariateOLS)
+    params : ndarray
+         parameter estimates from the fit model
+    """
+
+    def __init__(self, _MultivariateOLS, params):
+        self.initialize(_MultivariateOLS, params)
+    
+    def initialize(self, _MultivariateOLS, params):
+        """
+        Initialize (possibly re-initialize a _MultivariateResults instance
+        """
+        self.params = params
+        self.model = _MultivariateOLS
+
 
 class _MultivariateOLSResults(object):
     """
     _MultivariateOLS results class
+
+    Attributes
+    ----------
+    params : 2d ndarray
+         coefficients of intercept (if fit) and exog variables for each endog variable
+    df_resid : int
+         residual degrees of freedom
+    hasconst : boolean
+         True if model was fit with a constant, else False.
+    formula : str
+         R-style formula from which model was constructed.
+    ssr : float or array of floats
+         residual sum of squares. See method docstring for additional info.
+    df_model : int
+         model degrees of freedom (including constant if fit)
+    loglike : float
+         Value of log-liklihood function.
+    AIC : float
+         Akaike's information criteria. See method docstring for additional info.
+         
+
+
     """
     def __init__(self, fitted_mv_ols):
         if (hasattr(fitted_mv_ols, 'data') and
@@ -412,9 +461,74 @@ class _MultivariateOLSResults(object):
             self.design_info = None
         self.exog_names = fitted_mv_ols.exog_names
         self.endog_names = fitted_mv_ols.endog_names
+        self.nobs = fitted_mv_ols.nobs        
         self._fittedmod = fitted_mv_ols._fittedmod
-        self.nobs = self._fitted_mod[1] + len(self.exog_names)   # this is hacky. consider modifying _multivariate_ols_fit to return nobs.
+
+
+    @cache_readonly
+    def params(self):
+        """
+        Returns
+        ----------
+        params : 2d ndarray
+             coefficients of intercept (if fit) and exog variables for each endog variable
+
+        Array shape:
+
+                    Y1   Y2   ...
+        intercept   .    .
+        x1          .    .
+        x2          .    .
+        x3          .    .
+        ...
+        """
+
+        return self._fittedmod[0]
+
+    @cache_readonly
+    def df_resid(self):
+        return self._fittedmod[1]
+
+    @cache_readonly
+    def hasconst(self):
+        """
+        True if model was fit with a constant, else False.
+        """
+        if any(x in self.exog_names for x in ['const','Intercept']):
+            return True
+        else:
+            return False
     
+    @cache_readonly
+    def df_model(self):
+        """
+        Total number of estimated parameters: e.g. number of dependent/exog variables plus constant if one was fit.
+        """
+        return self.params.shape[0]
+        
+
+    @cache_readonly
+    def formula(self):
+        """
+        Extracts or builds R-style formula from model. For models created using `from_formula()`, returns
+        `formula` attribute. Otherwise, constructs model formula using `exog_names` and `endog_names` attributes.
+        Will aid in calling MANOVA.
+
+        Returns
+        ---------- 
+        formula : str
+            R-style formula from which model was constructed.
+        """
+        try:
+            formula = self._fittedmod.formula
+        except AttributeError:
+            if self.hasconst:
+                formula = " + ".join(self.endog_names) + " ~ " + " + ".join(self.exog_names[1:])
+            else:
+                formula = " + ".join(self.endog_names) + " ~ " + " + ".join(self.exog_names)
+        
+        return formula
+
 
     def ssr(self, multioutput="uniform_average"):
         """
@@ -456,9 +570,34 @@ class _MultivariateOLSResults(object):
         else:
             msg = "Expected str ['uniform_average','raw_values'] or array-like, got {}".format(type(multioutput))
             raise ValueError(msg)
+
+
+    @cache_readonly
+    def loglike(self, scale=None):
+        nobs = float(self.nobs)
+        nobs2 = self.nobs / 2.0
+        ssr=self.ssr()
+        if scale is None:
+            # profile log likelihood
+            llf = -nobs2*np.log(2*np.pi) - nobs2*np.log(ssr / nobs) - nobs2
+        else:
+            # log-likelihood
+            llf = -nobs2 * np.log(2 * np.pi * scale) - ssr / (2*scale)
+        return llf
         
+        
+    @cache_readonly
+    def aic(self):
+        r"""
+        Akaike's information criteria.
+        
+        :math:`-2llf + 2(df\_model)`.
+        Note that df_model includes the constant (if fit).
+        """
+        return -2 * self.loglike + (2 * self.df_model)
+    
 
-
+    
     def __str__(self):
         return self.summary().__str__()
 
@@ -510,6 +649,97 @@ class _MultivariateOLSResults(object):
 
     def summary(self):
         raise NotImplementedError
+
+class F_test_multivariate():  # this could probably just be a function
+    """
+    Performs F test to compare multivariate nested linear models.
+    
+    Parameters
+    ----------
+    unrestricted : fit multivariate model
+        Unrestricted/full/complex OLS linear model that has been fit to data.
+        expects class statsmodels.multivariate.multivariate_ols._MultivariateOLSResults
+        
+    restricted : fit multivariate model
+        Restricted/simple OLS linear model that has been fit to data. 
+        Must contain one fewer independent/exogenous variable than unrestricted model.
+        expects class statsmodels.multivariate.multivariate_ols._MultivariateOLSResults
+        
+    Attributes
+    ----------
+    ssr1 : float
+        Residual sum of squares of restricted model
+    ssr2 : float
+        Residual sum of squares of unrestricted model
+    df_model_1 : int
+        Number of independent/exog variables in restricted model
+    df_model_2 : int
+        Number of independent/exog variables in unrestricted model
+    df_resid : int
+        Residual degrees of freedom for unrestricted model.
+    nobs : int
+        Number of observations. Should be equal for both models.
+    
+    F_statistic : float
+        F statistic calculated from both models
+    
+    PrF : float
+        P-value for F statistic. Is the difference in ssr between the two models 
+        significantly more than would be expected by chance?
+        
+    results : dataframe
+        Summarizes the parameters above.
+    """
+    def __init__(self, restricted, unrestricted):
+        self.unrestricted = unrestricted # do I need this statement?
+        self.restricted = restricted # do I need this statement?
+        self.ssr1 = restricted.ssr()
+        self.ssr2 = unrestricted.ssr()
+        self.df_model_1 = restricted.df_model
+        self.df_model_2 = unrestricted.df_model
+        self.df_resid = unrestricted.df_resid
+        if not self.df_model_2 > self.df_model_1:
+            raise ValueError("Unrestricted model must have more model degrees of freedom than restricted model!")
+        
+        if restricted.nobs != unrestricted.nobs:
+            raise ValueError("Number of observations (nobs) are not equivalent between models!")
+        self.nobs = restricted.nobs
+    
+    @cache_readonly
+    def F_statistic(self):
+        """
+        '1' refers to restricted model
+        '2' refers to unrestricted model
+        """
+        num = (self.ssr1 - self.ssr2) / (self.df_model_2 - self.df_model_1)
+        # NOTE: statsmodels.stats.anova_lm() has a "scale" parameter here. I'm not sure what that is.
+        denom = self.ssr2 / (self.nobs - self.df_model_2)
+        F_stat = num / denom
+        return F_stat
+    
+    @cache_readonly
+    def prF(self):
+        df_diff = self.df_model_2 - self.df_model_1
+        return stats.f.sf(self.F_statistic, df_diff, self.df_resid)
+    
+    @cache_readonly
+    def results(self):
+        models=[self.restricted, self.unrestricted]
+        cols=['formula','df_resid','ssr', 'model_df','model_df_diff','ssr_diff','F_stat','Pr>F']
+        df = pd.DataFrame(np.zeros((2,len(cols))), index=["restricted model","unrestricted model"], 
+                          columns=cols)
+        
+        df['formula'] = [mdl.formula for mdl in models]
+        df['df_resid'] = [mdl.df_resid for mdl in models]
+        df['ssr'] = [mdl.ssr() for mdl in models]
+        df['model_df'] = [mdl.df_model for mdl in models]
+        df['model_df_diff'] = df['model_df'].diff()
+        df['ssr_diff'] = df['ssr'].diff()
+        df.loc['unrestricted model','F_stat'] = self.F_statistic
+        df.loc['unrestricted model','Pr>F'] = self.prF
+        
+        df = df.replace(0, np.nan)
+        return df
 
 
 class MultivariateTestResults(object):
