@@ -653,6 +653,8 @@ class _MultivariateOLSResults(object):
 class F_test_multivariate():  # this could probably just be a function
     """
     Performs F test to compare multivariate nested linear models.
+
+    Usage: F_test_multivariate(restricted, unrestricted)
     
     Parameters
     ----------
