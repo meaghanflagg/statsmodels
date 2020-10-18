@@ -656,15 +656,15 @@ class F_test_multivariate():  # this could probably just be a function
     
     Parameters
     ----------
-    unrestricted : fit multivariate model
-        Unrestricted/full/complex OLS linear model that has been fit to data.
-        expects class statsmodels.multivariate.multivariate_ols._MultivariateOLSResults
-        
     restricted : fit multivariate model
-        Restricted/simple OLS linear model that has been fit to data. 
+        Restricted/simple OLS linear model that has been fit to data.
         Must contain one fewer independent/exogenous variable than unrestricted model.
         expects class statsmodels.multivariate.multivariate_ols._MultivariateOLSResults
         
+    unstricted : fit multivariate model
+        Unrestricted/full/complex OLS linear model that has been fit to data.
+        expects class statsmodels.multivariate.multivariate_ols._MultivariateOLSResults
+
     Attributes
     ----------
     ssr1 : float
