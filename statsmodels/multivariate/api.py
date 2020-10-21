@@ -7,4 +7,5 @@ from .pca import PCA
 from .manova import MANOVA
 from .factor import Factor, FactorResults
 from .cancorr import CanCorr
+from .modelselection import forward_stepwise
 from . import factor_rotation

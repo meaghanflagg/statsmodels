@@ -113,6 +113,7 @@ if [ "$LINT" == true ]; then
         statsmodels/multivariate/api.py \
         statsmodels/multivariate/factor_rotation/_analytic_rotation.py \
         statsmodels/multivariate/pca.py \
+	statsmodels/multivariate/modelselection.py \
         statsmodels/multivariate/tests/results/ \
         statsmodels/nonparametric/__init__.py \
         statsmodels/nonparametric/api.py \
