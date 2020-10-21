@@ -1,16 +1,13 @@
 # TODO: add support for non-OLS regression
 
 """
-Forward stepwise model selection
+Functions to perform model selection using multivariate OLS regression.
+
+Currently includes:
+ -------
+forward_stepwise : performs forward stepwise model selection
 
 Author : Meaghan Flagg
-
-Start with null model (Y ~ 1)
-Fit p OLS regression models, each with one of the X variables and the intercept
-Select the best out of these models, and fix this X term in the model going forward. (lowest residual sum of squares, highest R squared, lowest P-value)
-Search through remaining p-1 variables and determine which variable should be added to the current model to best improve the residual sum of squares.
-Continue until some stopping rule is satisfied (additional terms have p-value > 0.05, minimum AIC is reached)
-
 """
 
 import pandas as pd
@@ -20,10 +17,25 @@ import statsmodels.multivariate.multivariate_ols as smv
 
 idx=pd.IndexSlice
 
-def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose=False):
+def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", return_dropped=False,verbose=False):
     """
     Performs forward stepwise model selection for a set of X and Y data.
-    
+
+    1. Start with null model (Y ~ 1)
+    2. Fit p OLS regression models, each with one of the X variables and the intercept,
+       where p is the number of X terms in the dataset.
+    3. Select the best out of these models, and fix this X term in the model going forward.
+         a. lowest residual sum of squares (param_select='ssr')
+         b. lowest p-value from MANOVA test (not yet implemented)
+    4. Compare this "test" model to previous reference model using F test to determine
+       if reduction in residual sum of squares is significant.
+    5. Remove any terms that are highly co-linear with selected terms.
+    6. Search through remaining p-1 terms and determine which term should be added to the
+       current model to best improve the residual sum of squares.
+    7. Continue until some stopping rule is satisfied or you have run out of terms
+         a. additional terms have p-value > threshold in MANOVA (not yet implemented)
+
+
     Parameters
     -------
     X : array-like
@@ -43,9 +55,11 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
     statistic : str, optional
         Can be one of ['pillai','wilks','hotelling-lawly','roys']. Test statistic used by
         statsmodels.multivariate.manova to calculate statistical significance of added parameters.
-    verbose : boolean, optional
+    return_dropped : boolean, optional
         If True, return an additional dataframe containing information about paramters that
         were not added to model due to co-linearity.
+    verbose : boolean, optional
+        If True, print status updates.
     
     Returns
     -------
@@ -88,7 +102,7 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
     
     
     # initialize empty dataframes to store results from each round of parameter addition, and dropped params
-    cols=["formula","ssr","log-likelihood","F statistic","Pr>F","AIC"]
+    cols=["formula","param_Pr>F","ssr","log-likelihood","df_model","F statistic","Pr>F","AIC"]
     resDF = pd.DataFrame(np.zeros((1,len(cols))), index=["NullModel"], columns=cols)
     
     dropDF = pd.DataFrame(columns=["colinear_var","spearman_r"])
@@ -98,14 +112,16 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
     nullmod = smv._MultivariateOLS.from_formula(
     formula=nullformula, data=data).fit()
     # add to results df
-    resDF.loc["NullModel"] = [nullmod.formula, nullmod.ssr(), nullmod.loglike, np.nan, np.nan, nullmod.aic]
+    resDF.loc["NullModel"] = [nullmod.formula.split('~')[1], np.nan, nullmod.ssr(), nullmod.loglike, nullmod.df_model,np.nan, np.nan, nullmod.aic]
     
-    #import pdb; pdb.set_trace() #####
-    
-    params=exog_names
+    itercount=0
+
+    params=list(exog_names)
     bestmodel=None
     while len(params) > 0: # e.g. as long as there are parameters remaining
         
+        itercount+=1
+
         # initialize empty df to store parameter data
         cols=["paramter","ssr","statistic","F-value","Pr>F"]
         paramDF = pd.DataFrame(columns=cols, index=params)
@@ -122,7 +138,7 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
                 formula=formula, data=data).fit()
             
             # run MANOVA to calculate p val for parameters
-            manv = manova.MANOVA.from_formula(testmod.formula, data=cars).mv_test()
+            manv = manova.MANOVA.from_formula(testmod.formula, data=data).mv_test()
             Fval = manv.summary_frame.loc[idx[param, manv_statistic],"F Value"]
             PrF = manv.summary_frame.loc[idx[param, manv_statistic],"Pr > F"]
             
@@ -140,7 +156,7 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
         
         # initialize model with best parameter
         formula = refmodel.formula + " + {0}".format(str(bestParam))
-        bestmodel = statsmodels.multivariate.multivariate_ols._MultivariateOLS.from_formula(
+        bestmodel = smv._MultivariateOLS.from_formula(
                 formula=formula, data=data).fit()
             
         # run F test versus refmodel:
@@ -148,7 +164,8 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
         fTest = smv.F_test_multivariate(refmodel, bestmodel)
         
         # add data to results df
-        resDF.loc[bestParam] = [bestmodel.formula, bestmodel.ssr(), bestmodel.loglike,
+        resDF.loc[bestParam] = [bestmodel.formula.split('~')[1], paramDF.loc[bestParam,"Pr>F"], 
+                                bestmodel.ssr(), bestmodel.loglike, bestmodel.df_model,
                                 fTest.F_statistic, fTest.prF, bestmodel.aic]
         
         # remove bestParam and any highly co-linear variables from remaining params:
@@ -162,7 +179,14 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", verbose
             dropDF.loc[d,"colinear_var"] = bestParam
             dropDF.loc[d,"spearman_r"] = corr.loc[d,bestParam]
             #resDF.loc[d,"formula"] = "dropped due to colinearity with {0}".format(bestParam)
-    if verbose == True:
+        
+        if verbose == True:
+            print('Iteration #{0}'.format(str(itercount)))
+            print('adding {0} to model'.format(str(bestParam)))
+            print('dropped: {0}'.format(', '.join(drop)))
+            print('-' * 20, '\n')
+
+    if return_dropped == True:
         return resDF.sort_values(by="AIC", ascending=True), dropDF
     else:
         return resDF.sort_values(by="AIC", ascending=True)
