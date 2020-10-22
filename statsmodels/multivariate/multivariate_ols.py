@@ -433,7 +433,7 @@ class _MultivariateOLSResults(object):
 
     Attributes
     ----------
-    params : 2d ndarray
+    params : pandas dataframe
          coefficients of intercept (if fit) and exog variables for each endog variable
     df_resid : int
          residual degrees of freedom
@@ -470,10 +470,10 @@ class _MultivariateOLSResults(object):
         """
         Returns
         ----------
-        params : 2d ndarray
+        params : pandas dataframe
              coefficients of intercept (if fit) and exog variables for each endog variable
 
-        Array shape:
+        dataframe shape:
 
                     Y1   Y2   ...
         intercept   .    .
@@ -482,8 +482,9 @@ class _MultivariateOLSResults(object):
         x3          .    .
         ...
         """
-
-        return self._fittedmod[0]
+        params = self._fittedmod[0]
+        
+        return pd.DataFrame(params, columns=self.endog_names, index=self.exog_names)
 
     @cache_readonly
     def df_resid(self):
