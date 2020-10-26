@@ -14,10 +14,11 @@ import pandas as pd
 import numpy as np
 import statsmodels.multivariate.manova as manova
 import statsmodels.multivariate.multivariate_ols as smv
+import warnings
 
 idx=pd.IndexSlice
 
-def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", return_dropped=False,verbose=False):
+def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", pval_thresh=None, return_dropped=False, verbose=False):
     """
     Performs forward stepwise model selection for a set of X and Y data.
 
@@ -33,7 +34,7 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", return_
     6. Search through remaining p-1 terms and determine which term should be added to the
        current model to best improve the residual sum of squares.
     7. Continue until some stopping rule is satisfied or you have run out of terms
-         a. additional terms have p-value > threshold in MANOVA (not yet implemented)
+         a. additional terms have p-value > threshold in MANOVA
 
 
     Parameters
@@ -55,6 +56,8 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", return_
     statistic : str, optional
         Can be one of ['pillai','wilks','hotelling-lawly','roys']. Test statistic used by
         statsmodels.multivariate.manova to calculate statistical significance of added parameters.
+    pval_thresh : float, optional
+        Stop parameter addition when MANOVA p-value for all remaining terms is greater than threshold.
     return_dropped : boolean, optional
         If True, return an additional dataframe containing information about paramters that
         were not added to model due to co-linearity.
@@ -138,14 +141,32 @@ def forward_stepwise(X, Y, data, param_select="ssr", statistic="pillai", return_
                 formula=formula, data=data).fit()
             
             # run MANOVA to calculate p val for parameters
-            manv = manova.MANOVA.from_formula(testmod.formula, data=data).mv_test()
-            Fval = manv.summary_frame.loc[idx[param, manv_statistic],"F Value"]
-            PrF = manv.summary_frame.loc[idx[param, manv_statistic],"Pr > F"]
+            try:
+                manv = manova.MANOVA.from_formula(testmod.formula, data=data).mv_test()
+                Fval = manv.summary_frame.loc[idx[param, manv_statistic],"F Value"]
+                PrF = manv.summary_frame.loc[idx[param, manv_statistic],"Pr > F"]
+                
+                # add data to paramDF
+                paramDF.loc[param] = [param,testmod.ssr(),manv_statistic,Fval,PrF]
+
+            except np.linalg.LinAlgError as e: # in some scenarios, running MANOVA generates LinAlgError: singular matrix. Not sure why, could this be due to minimal variation?
+                warnings.warn("{0}\nSkipping parameter: {1}".format(str(e), str(param)))
+                continue # go to next parameter
             
-            # add data to paramDF
-            paramDF.loc[param] = [param,testmod.ssr(),manv_statistic,Fval,PrF]
             ########################## end of parameter addition ###########################
-        
+
+        if pval_thresh:
+            # nan pvalues cause problems here. replace them with 1.
+            paramDF["Pr>F"] = paramDF["Pr>F"].replace(np.nan, 1)
+            if paramDF["Pr>F"].min() > pval_thresh: # all parameters are above pval_thresh
+                if verbose==True: print("No remaining params with Pr>F < {}, exiting".format(pval_thresh))
+                break # exit while loop, should go to line 207
+            
+            else: # filter paramDF to only include terms with Pr>F < pval_thresh:
+                paramDF = paramDF[ paramDF["Pr>F"] < pval_thresh ]
+
+
+
         # Choose best parameter:
         if param_select == "ssr":
             bestParam = paramDF.sort_values(by="ssr", ascending=True).index[0]
